@@ -1,0 +1,220 @@
+---
+title: PTSB Twitter Sentiment
+author: '[Elio Bolliger](https://www.eliobolliger.com)'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+summary: ''
+slug: []
+categories:
+tags:
+  - Financial Markets
+  - NLP
+links:
+- icon: twitter
+  icon_pack: fab
+  name: Follow
+  url: https://twitter.com/BolligerElio
+slides: ""
+math: true
+description: Description for the page
+editor_options: 
+  chunk_output_type: console
+output: bookdown::html_document2
+---
+
+
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE, fig.height = 4, warning = FALSE, out.width = "100%"
+)
+
+if (!require("ggplot2")) {install.packages("ggplot2"); library('ggplot2')}
+if (!require("tidyverse")) {install.packages("tidyverse"); library('tidyverse')}
+if (!require("matrixStats")) {install.packages("matrixStats"); library('matrixStats')}
+if (!require("tidymodels")) {install.packages("tidymodels"); library('tidymodels')}
+if (!require("lme4")) {install.packages("lme4"); library('lme4')}
+if (!require("haven")) {install.packages("haven"); library('haven')}
+if (!require("miceadds")) {install.packages("miceadds"); library('miceadds')}
+if (!require("rmarkdown")) {install.packages("rmarkdown"); library('rmarkdown')}
+if (!require("reshape2")) {install.packages("reshape2"); library('reshape2')}
+if (!require("plotly")) {install.packages("plotly"); library('plotly')}
+if (!require("knitr")) {install.packages("knitr"); library('knitr')}
+if (!require("kableExtra")) {install.packages("kableExtra"); library('kableExtra')}
+if (!require("htmltools")) {install.packages("htmltools"); library('htmltools')}
+if (!require("data.table")) {install.packages("data.table"); library('data.table')}
+if (!require("zoo")) {install.packages("zoo"); library('zoo')}
+if (!require("processx")) install.packages("processx")
+
+theme_set(theme_bw())
+```
+
+
+```{r}
+# Move this css tag outside the chunk to control the width of text
+# on the page.
+# <style type="text/css">
+# .main-container {
+#   max-width: 1000px;
+#   margin-left: auto;
+#   margin-right: auto;
+# }
+# </style>
+
+```
+
+
+
+```{r, include = FALSE}
+
+# load in separately downloaded data:
+
+dat <- fread("/Users/ebollige/Dropbox/3_PhD/Projects/TWITTER_CREDITSUISSE/tweets_ptsb/sentiment.csv")
+
+dat1 <- dat %>%
+  dplyr::select(date,sentiment) %>%
+  dplyr::mutate(sn = case_when(sentiment == "negative" ~ -1,
+                                      sentiment == "positive" ~ 1,
+                                      sentiment == "neutral" ~ 0)) %>%
+  dplyr::mutate(date = as.Date(date)) %>%
+  group_by(date) %>%
+  summarise(sn = mean(sn,na.rm = TRUE),
+            n = n())
+
+# merge data:
+datmerge <- dat1
+
+
+# add data about stock market prices:
+cs <- fread("/Users/ebollige/Dropbox/3_PhD/Projects/TWITTER_CREDITSUISSE/tweets_ptsb/ptsb_sharep.csv") %>%
+  dplyr::select(Date, Close) %>%
+  dplyr::rename(date = Date) %>%
+  dplyr::mutate(date = as.Date(date)) %>%
+  dplyr::mutate(Close = as.numeric(Close)) %>%
+  arrange(date) %>%
+  dplyr::mutate(gr = (Close - lag(Close))/lag(Close)*100)
+
+# merge data:
+fdat <- merge(datmerge,cs, all.y = TRUE, all.x = TRUE)
+
+# standardise the sentiment measure and linearly interpolate data for growth rate of stocks
+fdat <-  fdat %>%
+  ungroup() %>%
+  dplyr::mutate(sumobs = sum(n, na.rm = TRUE)) %>%
+  dplyr::mutate(wm = (sn * n)/sumobs ) %>%
+  dplyr::mutate(resmeandat= ifelse(date <= "2023-03-01", wm, NA)) %>%
+  dplyr::mutate(means = mean(resmeandat,na.rm = TRUE)) %>%
+  dplyr::mutate(sds = sd(resmeandat,na.rm = TRUE) ) %>%
+  dplyr::mutate(sentstandard = (wm-means)/sds ) %>%
+  ungroup() %>%
+  arrange(date)  %>%
+    mutate(time=seq(1,n())) %>%
+      mutate(grip=approx(time,gr,time)$y) %>%
+      select(-time)
+
+fdat <- fdat %>%
+ dplyr::filter(date >= "2021-01-01") %>%
+  dplyr::mutate(lsent = lag(sentstandard)) %>% 
+    dplyr::mutate(rollmean = zoo::rollmean(sentstandard, k = 31, fill = NA))
+
+correlation <- round(cor(fdat$grip,fdat$sentstandard, use="complete.obs"),2)
+correlation
+
+# correlation <- round(cor(fdat$grip,fdat$rollmean, use="complete.obs"),2)
+# correlation
+
+```
+
+
+```{r, include = FALSE}
+#fdat <- fdat %>%
+#  dplyr::filter(date >= "2022-03-01")
+
+
+sum <- sum(fdat$n,na.rm = TRUE)
+
+fig <- plot_ly()
+# Add traces
+fig <- fig %>% add_trace(x = ~fdat$date, y = ~fdat$grip, name = "PTSB Stock Price", mode = "lines+markers", 
+                         type = "scatter", 
+                         marker=list(symbol = 'x',
+                                      size = 3,
+                                      opacity = 1, line = 
+                                        list(width = 1, color = "steelblue")),
+                          line = list(color = "steelblue")
+                         )
+
+ay <- list(
+  tickfont = list(color = "firebrick"),
+  overlaying = "y",
+  side = "right",
+  title = "<b>Sentiment</b>")
+
+fig <- fig %>% add_trace(x = ~fdat$date, y = ~fdat$sentstandard, name = "Sentiment on Twitter", yaxis = "y2", mode = "lines+markers", type = "scatter", marker=list(color = "firebrick", symbol = 'triangle-up',
+                                      size = 3,
+                                      opacity = 1, line = 
+                                        list(width = 1, color = "firebrick")),
+        line = list(color = "firebrick"))
+
+# Set figure title, x and y-axes titles
+fig <- fig %>% layout(
+  title = "", yaxis2 = ay,
+  xaxis = list(title="Date"),
+  yaxis = list(title="<b>Stock Price, Daily Change (%)</b>"),
+        legend = list(x = 0.1, y = 0.9)
+)%>%
+  layout(plot_bgcolor='white', 
+         xaxis = list( 
+           zerolinecolor = '#ffff', 
+           zerolinewidth = 2), 
+          yaxis = list(
+            zerolinecolor = '#ffff',
+            zerolinewidth = 2,
+            range=c(-25,25)
+          ),
+        yaxis2 = list(
+            range=c(-5,5)
+            #range=c(-0.01,0.01)
+        )
+        #,
+        #width = 1000, height = 800, autosize = F
+        ) 
+# 
+# fig <- fig %>% add_annotations(x=as.Date("2022-09-22"), y=-12,
+#             text="Rumours of splitting investment bank",
+#             showarrow=T,
+#             arrowhead=1,
+#             ax=-120)
+# 
+# fig <- fig %>% add_annotations(x=as.Date("2022-10-02"), y=-20,
+#             text="Rumours of additional capital needs",
+#             showarrow=T,
+#             arrowhead=1, ax = -120)
+# 
+# fig <- fig %>% add_annotations(x=as.Date("2022-10-27"), y=-24,
+#             text="Strategy release, job losses",
+#             showarrow=T,
+#             arrowhead=1, ax = 100)
+# 
+# fig <- fig %>% add_annotations(x=as.Date("2022-11-01"), y=-12.3,
+#             text="S&P donwgraded CS",
+#             showarrow=T,
+#             arrowhead=1, ax = 100)
+# 
+# fig <- fig %>% add_annotations(x=as.Date("2023-03-15"), y=-24,
+#             text="Saudi NB announcement",
+#             showarrow=T,
+#             arrowhead=1, ax = -100, ay = -60)
+
+```
+
+
+
+```{r sent, out.width="100%", out.height= "600px", fig.cap="PTSB Twitter Sentiment"}
+fig
+```
+
+Correlation of the two series: `r correlation`.
+
+Average number of tweets per day: `r round(mean(fdat$n,na.rm=T),2)`.
+
+Maximum number of tweets: `r round(max(fdat$n,na.rm=T),2)`.
